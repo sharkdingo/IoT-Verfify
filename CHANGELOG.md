@@ -19,6 +19,23 @@ history into a technical spec. The spec content itself now lives under
 
 #### Fixed
 
+- **A board edit made while a run was in flight produced a verdict that claimed to describe the
+  current canvas.** Editing the board is what makes a displayed conclusion stale, and the board says
+  so with a re-run banner and by withdrawing the per-counterexample Fix action. That worked for an
+  edit made *after* a result appeared. It did nothing for an edit made *during* the run: the staleness
+  hook can only flag a result that exists, and both run paths clear the result before submitting, so
+  for the entire duration of a run there was nothing to flag — and the completion path then marked the
+  arriving verdict current unconditionally.
+
+  A user who applied a fix, added a rule, or changed a device while NuSMV was working therefore
+  received a verdict about the model frozen at submission, presented as a verdict about the scene in
+  front of them, still offering a Fix computed against a scene that no longer existed. All four paths
+  that await a run — synchronous and background verification, synchronous and background simulation,
+  and watching an existing task from the inbox — now capture a semantic-change counter at submission
+  and compare it on arrival, so such a result arrives stale. Runs read back from history are
+  unaffected: they were never in flight, so they stay current rather than depending on unrelated
+  editing history.
+
 - **An unavailable SMV model blamed a cause that was often not the user's.** The notice beside a
   disabled download told every reader to "check whether the run is still in your history". That is
   sound advice for a run that was saved and whose model is genuinely gone — but four

@@ -289,7 +289,13 @@ read-only historical model snapshot:
   positions and relationships. Frozen rule labels are used for trace evidence, and playback never
   resolves node presentation through the current template or rule catalog;
 - a later Board edit makes the conclusion stale for the current model and withdraws repair actions,
-  but it does not suppress this historical replay;
+  but it does not suppress this historical replay. **"Later" includes during the run**: a semantic
+  edit made while a verification or simulation is in flight leaves the arriving result stale, because
+  it already describes the model frozen at submission. The client cannot detect that by watching the
+  displayed result — both run paths clear it before submitting, so there is nothing to flag for the
+  whole duration — so each path captures a semantic-change counter at submission and compares it on
+  arrival (`semanticSceneChangeCount` in `Board.vue`). A run read back from history was never in
+  flight and is simply current;
 - active edges come from backend `triggeredRules`, not frontend re-evaluation guesses;
 - edges are static outside playback, and command-flow particles appear only for a
   backend-reported triggered rule whose delivery link is not compromised. Each selected

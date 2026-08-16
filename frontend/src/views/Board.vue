@@ -6504,9 +6504,27 @@ const verificationResultStale = ref(false)
 // it uses the run's frozen visual scene; stale only means the conclusion is not about the live board.
 const simulationResultStale = ref(false)
 
+/*
+ * Semantic scene changes since load, counted.
+ *
+ * The flags below can only mark a result that already exists, and a run in flight has none:
+ * `handleVerify` and `handleSimulate` both null their result ref before submitting. So a board edit
+ * made *during* a run marked nothing, and the completion path then set the stale flag to `false`
+ * unconditionally — the verdict arrived presenting itself as describing the canvas the user was now
+ * looking at, offering a Fix computed against a scene that no longer existed. A run captures this
+ * counter at submission and compares it on arrival.
+ *
+ * Not `boardMutationAdmissionEpoch`, which counts *admitted mutations* rather than semantic changes:
+ * it advances for the undo-history preview and clear, which touch only the journal. Those would have
+ * marked a perfectly current verdict stale. This increments from the same callback that owns the
+ * staleness rule, so the two can never disagree about what counts as a semantic change.
+ */
+let semanticSceneChangeCount = 0
+
 // Called from the single semantic-scene-change hook in the board mutation queue, so every
 // mutation path (fix apply, chat tool, inspector edit) is covered by one rule.
 const markVerificationResultStale = () => {
+  semanticSceneChangeCount += 1
   if (verificationResult.value) verificationResultStale.value = true
   // Keyed on the surviving run, not the details dialog: the dialog can be closed and reopened from
   // `lastSimulationResult`, and replay admission is decided for the run. Watching the dialog ref
@@ -10323,13 +10341,19 @@ const watchSimulationTask = async (taskId: number) => {
     status: formatTaskProgressStage(taskSummary?.progressStage, taskSummary?.status) || t('app.taskInitializing')
   }
   closeHistoryPanel()
+  /*
+   * Same exposure as a run started from the panel, and reached more often: watching a task from the
+   * inbox is exactly when a user carries on editing. `handleSimulate` documents the mechanism.
+   */
+  const watchSubmissionSceneChanges = semanticSceneChangeCount
   try {
     const result = attachLocalRunSubmission(
       await pollAsyncSimulation(taskId),
       submissionForTask(activeSimulationSubmission.value, taskId)
     )
     lastSimulationResult.value = result
-    simulationResultStale.value = false
+    simulationResultStale.value =
+      semanticSceneChangeCount !== watchSubmissionSceneChanges
     if (result.traceId) {
       simulationHistoryRequests.invalidate()
       simulationRuns.value = [
@@ -12818,6 +12842,10 @@ const handleVerify = async (): Promise<boolean> => {
   verificationError.value = null
   verificationResult.value = null
   verificationResultStale.value = false
+  // The sync path awaits `boardApi.verify` here, so it has the same exposure the async path documents
+  // at `pollAsyncVerification`: a semantic board change while the request is open leaves the verdict
+  // describing the submitted scene.
+  const verifySubmissionSceneChanges = semanticSceneChangeCount
 
   try {
     const req = buildVerificationRequestPayload({
@@ -12865,7 +12893,8 @@ const handleVerify = async (): Promise<boolean> => {
       ...result,
       specResults: normalizeSpecResults((result as any).specResults)
     }, submission)
-    verificationResultStale.value = false
+    verificationResultStale.value =
+      semanticSceneChangeCount !== verifySubmissionSceneChanges
     if (['FAILED', 'OUTCOME_UNKNOWN'].includes(result.historyPersistence.status)) {
       notifyBlocked(result.historyPersistence.status === 'OUTCOME_UNKNOWN'
           ? t('app.verificationHistorySaveOutcomeUnknown')
@@ -13155,6 +13184,13 @@ const handleSimulate = async (simConfig: {
   simulationError.value = null
   simulationResult.value = null
   simulationResultStale.value = false
+  /*
+   * See `pollAsyncVerification` for the reasoning; a simulation trajectory has the same exposure. An
+   * async run awaits `pollAsyncSimulation` here, so a semantic change in between produces a trajectory
+   * of the submitted scene which the shared completion path below then presented as describing the
+   * current canvas. Captured for both paths because the sync path also awaits a request.
+   */
+  const simulationSubmissionSceneChanges = semanticSceneChangeCount
 
   // 重置异步任务状态
   if (normalizedSimConfig.isAsync) {
@@ -13237,7 +13273,8 @@ const handleSimulate = async (simConfig: {
     // openSimulationLogs(); the success path opens the timeline (below), not the result dialog.
     result = attachLocalRunSubmission(result, submission)
     lastSimulationResult.value = result
-    simulationResultStale.value = false
+    simulationResultStale.value =
+      semanticSceneChangeCount !== simulationSubmissionSceneChanges
     if (result.traceId) {
       simulationHistoryRequests.invalidate()
       simulationRuns.value = [
@@ -13379,6 +13416,21 @@ const pollAsyncVerification = async (
 ): Promise<void> => {
   let pollCount = 0
   const expectedPollingEpoch = pollingEpoch
+  /*
+   * The board can be edited while this run is in flight, and the arriving verdict describes the model
+   * that was frozen at submission — not the canvas the user is now looking at.
+   *
+   * The staleness hook in the mutation queue cannot cover this: it flags `verificationResult`, which is
+   * null for the whole duration of an async run (`handleVerify` clears it before submitting), so a
+   * mid-run edit marks nothing and the completion path then sets `verificationResultStale = false`
+   * unconditionally. The result presented itself as describing the current board while the Fix action it
+   * offered was computed against a scene that no longer exists.
+   *
+   * `semanticSceneChangeCount` is incremented by the same staleness hook, so "what counts as a change"
+   * cannot drift between the two. Comparing it across the run is what a `verificationResult` watcher
+   * structurally cannot do.
+   */
+  const submissionSceneChanges = semanticSceneChangeCount
 
   while (pollCount < ASYNC_TASK_MAX_POLLS) {
     throwIfPollingAborted(expectedPollingEpoch)
@@ -13425,9 +13477,12 @@ const pollAsyncVerification = async (
         options.submission || submissionForTask(activeVerificationSubmission.value, taskId)
       )
       upsertVerificationTaskSummary({ ...task, progress: 100 })
+      // A semantic board change while this run was in flight means the verdict already describes a
+      // superseded scene, so it arrives stale rather than being presented as current.
+      const boardChangedDuringRun = semanticSceneChangeCount !== submissionSceneChanges
       if (options.presentResult || showVerificationPanel.value) {
         verificationResult.value = result
-        verificationResultStale.value = false
+        verificationResultStale.value = boardChangedDuringRun
         notifyVerificationOutcome(verificationResult.value, { presenting: true })
         showVerificationPanel.value = false
       } else {
@@ -13989,6 +14044,21 @@ const verificationSpecResultSummary = computed(() => {
     inconclusive
   }
 })
+/**
+ * The headline violation count, taking whichever source claims more.
+ *
+ * `Math.max` looks like defensive padding and is not. A fresh run cannot make traces exceed violated
+ * specifications — `VerificationServiceImpl` builds at most one trace per violated spec, inside the
+ * `!passed` branch — so on that path the max always returns `violated` and the second operand is inert.
+ * It earns its place on the *history* path: `buildVerificationResultFromRun` takes traces as an argument
+ * and reads `specResults` off the stored run row, so a row whose per-specification results are missing or
+ * empty yields `violated: 0` beside counterexamples the user can see and replay. Reporting "no
+ * violations" there would contradict the evidence on screen.
+ *
+ * The reverse direction is the shortfall below, which is a real and expected state rather than a
+ * data-loss symptom: NuSMV can refute a specification without returning a counterexample this parser can
+ * replay.
+ */
 const verificationViolationCount = computed(() =>
   Math.max(verificationSpecResultSummary.value.violated, verificationResult.value?.traces?.length || 0)
 )
