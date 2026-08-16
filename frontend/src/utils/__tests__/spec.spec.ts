@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildSpecFormula, isSameSpecification } from '../spec'
+import { buildSpecFormula, isSameSpecification, specFormulaKindFromTemplate } from '../spec'
 import type { DeviceNode } from '@/types/node'
 import type { DeviceTemplate } from '@/types/device'
 import type { Specification } from '@/types/spec'
@@ -481,5 +481,49 @@ describe('spec formula preview', () => {
     expect(preview('true')).toBe('CTL AG("Temperature Sensor"."Enabled" = TRUE)')
     expect(preview('TRUE')).toBe('CTL AG("Temperature Sensor"."Enabled" = TRUE)')
     expect(preview('Untrusted')).toBe('CTL AG("Temperature Sensor"."Enabled" = untrusted)')
+  })
+})
+
+/**
+ * The chip beside the spec builder's formula preview read "Model" for every template.
+ *
+ * `ControlCenter` derived it by looking for a `CTLSPEC`/`LTLSPEC` prefix, which `buildSpecFormula`
+ * does not emit — it writes `CTL AG(...)` / `LTL G(...)`, and the keyword form appears only in a
+ * trace's `checkedExpression`. So the label contradicted the formula printed immediately next to it,
+ * in the one surface where this distinction is being taught. `DeviceDialog` had a second, correct
+ * copy keyed on the template; the backend's `formulaKind` is a third. One derivation now.
+ */
+describe('specification formula kind', () => {
+  it('names the logic each template is checked in', () => {
+    // Template 6 (persistence, G(IF -> F G(THEN))) is the only LTL one, matching the backend's
+    // `"6".equals(templateId) ? "LTL" : "CTL"` fallback and the generator that emits it.
+    expect(specFormulaKindFromTemplate('6')).toBe('LTL')
+    for (const templateId of ['1', '2', '3', '4', '5', '7']) {
+      expect(specFormulaKindFromTemplate(templateId), `template ${templateId}`).toBe('CTL')
+    }
+  })
+
+  it('agrees with the prefix of the formula the builder emits for the same template', () => {
+    // The regression this replaces: reading the formula text and reading the template must not
+    // disagree. Asserting against `buildSpecFormula` output means a change to either one reddens.
+    for (const templateId of ['1', '2', '3', '4', '5', '6', '7']) {
+      const formula = buildSpecFormula({
+        templateId: templateId as Specification['templateId'],
+        templateLabel: '',
+        aConditions: [],
+        ifConditions: [],
+        thenConditions: []
+      } satisfies Pick<Specification, 'templateId' | 'templateLabel' | 'aConditions' | 'ifConditions' | 'thenConditions'>)
+      const kind = specFormulaKindFromTemplate(templateId)
+      expect(formula.startsWith(`${kind} `), `template ${templateId}: ${kind} vs ${formula}`).toBe(true)
+    }
+  })
+
+  it('returns null for an unknown template, so a caller can fall back rather than guess', () => {
+    // Null rather than a default 'CTL': claiming a logic for a spec whose template is unrecorded
+    // would be a statement about formal evidence the data does not support.
+    expect(specFormulaKindFromTemplate(undefined)).toBeNull()
+    expect(specFormulaKindFromTemplate('')).toBeNull()
+    expect(specFormulaKindFromTemplate('99')).toBeNull()
   })
 })

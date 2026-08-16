@@ -6,7 +6,7 @@ import { useModalAccessibility } from '@/composables/useModalAccessibility'
 import type {DeviceManifest, DeviceTemplate, InternalVariable} from '../types/device'
 import type {DeviceNode} from '../types/node'
 import type {Specification} from '../types/spec'
-import { buildSpecFormula } from '@/utils/spec'
+import { buildSpecFormula, specFormulaKindFromTemplate } from '@/utils/spec'
 import { verdictVariableSourceKeys } from '@/views/board/verdictVariableSource'
 import { resolveImpactEnvironmentDefinition } from '@/utils/device'
 import { specTemplateDetails } from '@/assets/config/specTemplates'
@@ -913,9 +913,15 @@ const formatTrigger = (trigger: any): string => {
    drifted in both directions. */
 const getDeviceIcon = (deviceName: string) => deviceIconFor(deviceName)
 
+/*
+ * The template decides the logic; the NuSMV keyword prefix is only a fallback for a spec carrying no
+ * template. This used to hardcode `templateId === '6'` locally, which was correct but was the second of
+ * three copies of that rule — the third, in `ControlCenter`, had drifted into reading a prefix that the
+ * formula builder never writes. `specFormulaKindFromTemplate` now owns it for both.
+ */
 const getSpecFormulaKind = (spec: Specification, formula: string) => {
-  if (spec.templateId === '6') return 'LTL'
-  if (spec.templateId) return 'CTL'
+  const fromTemplate = specFormulaKindFromTemplate(spec.templateId)
+  if (fromTemplate) return fromTemplate
   const normalized = String(formula || '').trim().toUpperCase()
   if (normalized.startsWith('LTLSPEC')) return 'LTL'
   if (normalized.startsWith('CTLSPEC')) return 'CTL'

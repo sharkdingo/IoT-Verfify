@@ -35,7 +35,7 @@ import {
   validateDeviceRuntimeConfig,
   type DeviceRuntimeConfig
 } from '@/utils/deviceRuntime'
-import { buildSpecFormula, isSpecConditionVariableSourceUnresolved } from '@/utils/spec'
+import { buildSpecFormula, isSpecConditionVariableSourceUnresolved, specFormulaKindFromTemplate } from '@/utils/spec'
 import {
   mergeSourcedEnvironmentPatches,
   type EnvironmentPatchConflict
@@ -1623,12 +1623,17 @@ const formatConditionValue = (value: unknown, deviceId?: string) =>
 const formatEditingConditionModelToken = (value: unknown) =>
   formatTemplateModelToken(getDeviceTemplate(editingConditionData.deviceId || ''), value)
 
-const specFormulaKind = computed(() => {
-  const formula = specForm.formula.trim().toUpperCase()
-  if (formula.startsWith('CTLSPEC')) return 'CTL'
-  if (formula.startsWith('LTLSPEC')) return 'LTL'
-  return t('app.modelFormulaKind')
-})
+/*
+ * Derived from the template, not from the formula text this same component builds.
+ *
+ * It used to look for a `CTLSPEC`/`LTLSPEC` prefix, which `buildSpecFormula` never writes — it emits
+ * `CTL AG(...)` / `LTL G(...)`, and NuSMV's keyword form appears only in a trace's `checkedExpression`.
+ * So this chip fell through to the generic "Model" label for all seven templates, sitting immediately
+ * beside a formula preview that begins with the very word it failed to read.
+ */
+const specFormulaKind = computed(
+  () => specFormulaKindFromTemplate(specForm.templateId) ?? t('app.modelFormulaKind')
+)
 
 // Update model formula preview based on conditions
 const updateFormula = () => {

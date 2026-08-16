@@ -183,6 +183,27 @@ export const buildSpecFormula = (spec: Pick<Specification,
     }
 }
 
+/**
+ * Which temporal logic a specification is checked in, or `null` when the template is unknown.
+ *
+ * Template 6 (`persistence`, `G(IF -> F G(THEN))`) is the only LTL one; the other six are CTL. That
+ * matches `ModelTraceToolPresenter.formulaKind`, which falls back to `"6" -> LTL` for the same reason,
+ * and it is derived from the same `type` switch as `buildSpecFormula` above rather than from the string
+ * it produces — reading the formula back is what made two callers disagree.
+ *
+ * `ControlCenter` parsed the emitted formula for a `CTLSPEC`/`LTLSPEC` prefix, which `buildSpecFormula`
+ * does not emit (it writes `CTL AG(...)` / `LTL G(...)`, and NuSMV's keyword form appears only in a
+ * trace's `checkedExpression`). So the chip beside the spec builder's formula preview matched neither
+ * branch and read "Model" for every template, contradicting the formula printed next to it — in the one
+ * place this distinction is being explained to the user. Callers that also have a raw NuSMV expression
+ * should prefer parsing it and use this as the fallback.
+ */
+export const specFormulaKindFromTemplate = (templateId?: string | null): 'CTL' | 'LTL' | null => {
+    const template = specTemplateDetails.find(t => t.id === templateId)
+    if (!template) return null
+    return template.type === 'persistence' ? 'LTL' : 'CTL'
+}
+
 const normalizeSpecificationSetValue = (
     value: unknown,
     relation: string,

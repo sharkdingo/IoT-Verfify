@@ -60,6 +60,19 @@ history into a technical spec. The spec content itself now lives under
   with no utility after it, so the one control whose whole job is "click me to seek here" gave no pointer
   feedback. It now highlights its border on hover, matching the identical rail in the simulation timeline.
 
+- **The specification builder labelled every formula "Model" instead of CTL or LTL.** The chip sits
+  immediately beside the formula preview, and the preview begins with the very word the chip failed to
+  read: `ControlCenter` derived the logic by looking for a `CTLSPEC`/`LTLSPEC` prefix, which
+  `buildSpecFormula` never emits — it writes `CTL AG(...)` / `LTL G(...)`, and NuSMV's keyword form
+  appears only in a trace's `checkedExpression`. So the one surface that teaches this distinction fell
+  through to the generic label for all seven templates while contradicting its own neighbour.
+
+  There were three implementations of the same rule: this one, a correct `templateId === '6'` copy in
+  `DeviceDialog`, and the backend's `formulaKind`. A single `specFormulaKindFromTemplate` now owns the
+  client side, keyed on the same template `type` switch that builds the formula rather than on the string
+  it produces, and it returns `null` for an unrecorded template so a caller falls back instead of
+  claiming a logic the data does not support.
+
 - **The playback header's violation chip appeared for an exploration finding and never for a
   counterexample.** It tested `activeFuzzingFinding.firstViolationStep` directly instead of reading the
   computed that owns the question, so stepping a verification counterexample onto its violating state left
