@@ -12194,7 +12194,12 @@ const activePlaybackLoopRange = computed<{ start: number; end: number } | null>(
   }
   if (loopStartIndex === -1) return null
 
-  // Find the loop back state (the final state that repeats the loop entry)
+  /*
+   * `findIndex` is correct here, unlike above: `SmvTraceParser.markLoopBackState` sets `loopBack` on the
+   * last state only, and on at most one state per trace, so there is no last-vs-first ambiguity to
+   * resolve. Verified against that method rather than assumed from the marker's symmetry with
+   * `loopStart`, which *can* appear several times.
+   */
   const loopBackIndex = states.findIndex(s => s.loopBack === true)
   if (loopBackIndex === -1) return null
 

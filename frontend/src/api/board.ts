@@ -2823,10 +2823,11 @@ export default {
     /*
      * There is deliberately no trace-keyed SMV download here.
      *
-     * `GET /api/verify/traces/{id}/smv` still exists server-side, but the model is one per *run* — the
-     * run-keyed download below is the only one the UI offers, and it is also the only one reachable
-     * for a run where every specification held (no counterexample to key on). Removing the endpoint
-     * is an API-contract change and needs its own decision.
+     * One model is generated per *run*, so a trace-keyed endpoint could only ever return a
+     * byte-identical copy of what the run-keyed download below returns — and the run key is also the
+     * only one reachable for a run where every specification held, which has no counterexample to
+     * address it by. `GET /api/verify/traces/{id}/smv` has been removed server-side for that reason
+     * (see `VerificationController`); do not reintroduce a client for it.
      */
 
     /**
