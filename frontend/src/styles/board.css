@@ -1497,6 +1497,26 @@
 .hover\:board-border-subtle:hover { border-color: var(--border); }
 .hover\:board-card--muted:hover { background-color: var(--board-card-muted-bg); }
 
+/*
+ * The neutral control's hover, for the 26 sites that had reached for `hover:bg-slate-100`/`200`.
+ *
+ * Those utilities cannot win here — Tailwind emits them into `@layer utilities`, and every rule in this
+ * file is unlayered, which outranks a layer at any specificity. So the hover either did nothing (where an
+ * `!important` remap owned the background) or painted near-white under light ink at 1.13:1. The derivation
+ * of the token, both themes, is on `--surface-control-hover` in `base.css`.
+ *
+ * The ink half is not optional on a muted control: light's hover ground leaves `--text-muted` at 4.23:1,
+ * under AA, so a site whose rest ink is muted must pair this with `hover:board-text-strong`. Sites already
+ * resting on `--text` need only the ground. `styles/__tests__/neutralHoverFeedback.spec.ts` enforces the pair.
+ *
+ * `!important` because the panel normalisers this must beat are 0-3-0 and sit *later* in the file
+ * (`.iot-board .board-floating-panel .bg-slate-100`, `.board-timeline .bg-slate-100`), so neither a
+ * bare 0-2-0 rule nor an `.iot-board`-prefixed tie can win — measured: the history panel's Dismiss
+ * button showed an identical ground at rest and on hover (5.71:1 both) until this was added. The
+ * `.board-timeline` twin further down carries the same flag for the sibling replay bars.
+ */
+.hover\:board-control-hover:hover { background-color: var(--surface-control-hover) !important; }
+
 .dark .dark\:board-text-progress { color: var(--accent); }
 .dark .dark\:board-border-progress { border-color: var(--accent); }
 
@@ -1940,6 +1960,18 @@
 .iot-board .hover\:board-text-warning:hover { color: var(--warning); }
 .iot-board .hover\:board-text-info:hover { color: var(--info); }
 .iot-board .hover\:board-text-strong:hover { color: var(--text); }
+
+/*
+ * The hover ground and the strong hover ink again, unprefixed, for the two replay bars.
+ *
+ * `.board-timeline-host` is a **sibling** of `.iot-board`, not a descendant — the same structure that made
+ * `--board-floating-gap` unreadable inside it and needed `boardShellStyle` injected. So every rule above is
+ * unreachable there, and the timeline's own neutral normaliser (`.board-timeline .text-slate-*`, 0-2-0, with
+ * `!important`) is what these must outrank instead. `!important` is required to beat it, not decoration:
+ * source order cannot help, since that block sits later in the file.
+ */
+.board-timeline .hover\:board-text-strong:hover { color: var(--text) !important; }
+.board-timeline .hover\:board-control-hover:hover { background-color: var(--surface-control-hover) !important; }
 
 .iot-board .group:hover .group-hover\:board-text-info { color: var(--info); }
 .iot-board .group:focus-within .group-focus-within\:board-text-info { color: var(--info); }

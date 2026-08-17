@@ -19410,8 +19410,8 @@ const counterexampleTraceHelpText = computed(() => {
               :class="traceAnimationState.isPlaying
                 ? 'bg-[color:var(--accent-fill)] text-white'
                 : totalStates <= 1
-                  ? 'bg-slate-100 text-slate-500'
-                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200'"
+                  ? 'board-chip-neutral'
+                  : 'board-chip-neutral hover:board-control-hover hover:board-text-strong'"
             >
               <span class="material-symbols-outlined text-sm" aria-hidden="true">{{ traceAnimationState.isPlaying ? 'pause' : 'play_arrow' }}</span>
               {{ traceAnimationState.isPlaying ? t('app.traceVisualization.pause') : t('app.traceVisualization.play') }}
@@ -19427,7 +19427,7 @@ const counterexampleTraceHelpText = computed(() => {
               <button
                 type="button"
                 data-testid="trace-timeline-restore-changes"
-                class="board-card inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 px-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100"
+                class="board-card inline-flex h-8 items-center gap-1 rounded-lg border board-border-subtle px-2 text-xs font-semibold board-text-strong transition-colors hover:board-control-hover"
                 :aria-label="t('app.showStepChanges')"
                 @click="resetPlaybackChanges"
               >
@@ -19440,7 +19440,7 @@ const counterexampleTraceHelpText = computed(() => {
                 type="button"
                 @click="openVerificationTraceDetails()"
                 data-testid="trace-timeline-run-details"
-                class="board-card inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 px-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100"
+                class="board-card inline-flex h-8 items-center gap-1 rounded-lg border board-border-subtle px-2 text-xs font-semibold board-text-strong transition-colors hover:board-control-hover"
                 :aria-label="t('app.viewCounterexampleDetails')"
               >
                 <span class="material-symbols-outlined text-base" aria-hidden="true">description</span>
@@ -19452,7 +19452,7 @@ const counterexampleTraceHelpText = computed(() => {
                 type="button"
                 @click="closeTraceAnimation"
                 data-testid="trace-timeline-close"
-                class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100"
+                class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium board-text-muted transition-colors hover:board-control-hover hover:board-text-strong"
                 :aria-label="t('app.close')"
               >
                 <span class="material-symbols-outlined text-base" aria-hidden="true">close</span>
@@ -19496,7 +19496,7 @@ const counterexampleTraceHelpText = computed(() => {
             <div class="flex items-center gap-1">
               <button
                 type="button"
-                class="board-card inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-300"
+                class="board-card inline-flex h-8 w-8 items-center justify-center rounded-lg border board-border-subtle board-text-strong transition-colors hover:board-control-hover disabled:cursor-not-allowed disabled:text-slate-300"
                 :disabled="traceAnimationState.selectedStateIndex <= 0"
                 :aria-label="t('app.traceVisualization.previousState')"
                 @click="selectPreviousTraceState"
@@ -19519,7 +19519,7 @@ const counterexampleTraceHelpText = computed(() => {
               </label>
               <button
                 type="button"
-                class="board-card inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-300"
+                class="board-card inline-flex h-8 w-8 items-center justify-center rounded-lg border board-border-subtle board-text-strong transition-colors hover:board-control-hover disabled:cursor-not-allowed disabled:text-slate-300"
                 :disabled="traceAnimationState.selectedStateIndex >= totalStates - 1"
                 :aria-label="t('app.traceVisualization.nextState')"
                 @click="selectNextTraceState"
@@ -19676,7 +19676,7 @@ const counterexampleTraceHelpText = computed(() => {
         </section>
 
         <details class="group mb-2 pt-2" data-testid="trace-step-environment-details">
-          <summary class="flex cursor-pointer list-none items-center justify-between gap-3 rounded-lg px-1 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-100">
+          <summary class="flex cursor-pointer list-none items-center justify-between gap-3 rounded-lg px-1 py-1 text-[11px] font-semibold board-text-muted hover:board-control-hover hover:board-text-strong">
             <span class="inline-flex items-center gap-1.5">
               <span class="material-symbols-outlined text-base" aria-hidden="true">tune</span>
               {{ t('app.traceVisualization.stateDetails') }}

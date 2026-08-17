@@ -68,6 +68,35 @@
     --surface-panel-muted: #f8fafc;
     --surface-overlay: rgba(255, 255, 255, 0.94);
     --surface-control: #f1f5f9;
+    /*
+     * The neutral hover step — the one the role set was missing.
+     *
+     * Every other interactive role owns its hover; the *neutral* control had none, so 26 call sites
+     * reached for Tailwind's `hover:bg-slate-100`/`200` instead. That cannot work here, and not for a
+     * specificity reason: Tailwind emits its utilities into `@layer utilities`, and an unlayered rule
+     * beats a layered one at *any* specificity. Verified in a browser — an unlayered `section.probeSec`
+     * (0-1-1) overrode `.bg-slate-100`. Since every rule in `board.css` is unlayered, the theme remaps
+     * there outrank all of them, and the two outcomes measured in dark mode were:
+     *
+     *   - alongside a bare `bg-slate-*`, the `!important` remap won and hover did **nothing** —
+     *     11.82:1 at rest and on hover, so the timeline's Play button had no feedback at all;
+     *   - with no bare ground to remap, the layered utility did apply, painting Tailwind's near-white
+     *     `oklch(0.968 ...)` = rgb(241,245,249) under light ink: **1.13:1**, text effectively gone.
+     *
+     * Adding `dark:hover:` variants would not fix either: they land in the same losing layer. A token
+     * consumed by an unlayered role class is the fix that holds.
+     *
+     * Asymmetric on purpose, like `--accent-fill-hover`: dark lightens, light darkens. Dark's #273548
+     * clears AA on both inks (`--text` 10.04, `--text-muted` 4.85) while staying perceptible over every
+     * ground it lands on (1.18 vs the control, 1.43 vs the card) and distinct from `--border` (1.2).
+     * Light's #e8edf3 gives `--text` 15.17 but `--text-muted` only **4.23**, and no light value satisfies
+     * both: `--text-muted` is itself tuned to sit at 4.55 on `--surface-control`, so any darkening pushes
+     * it under. That is why a muted control must *also* strengthen its ink on hover — the convention
+     * `SystemInspector` already wrote by hand as `hover:bg-slate-100 hover:text-slate-800`. Today's
+     * `hover:bg-slate-200` is worse on the same measure (4.04), so light improves rather than regresses.
+     */
+    --surface-control-hover: #e8edf3;
+
     --text: #0f172a;
     /* Solved against every surface this can land on, not just white. At #64748b it cleared AA on
      * white (4.76) but failed on the accent (4.37) and danger (4.35) tints — and muted text sits on
@@ -308,6 +337,9 @@
     --surface-panel-muted: #111827;
     --surface-overlay: rgba(15, 23, 42, 0.94);
     --surface-control: #1e293b;
+    /* Dark lightens rather than darkens; see the light block for the full derivation. */
+    --surface-control-hover: #273548;
+
     --text: #e5e7eb;
     --text-muted: #94a3b8;
     --border: #334155;
@@ -433,6 +465,9 @@
     --surface-panel-muted: #f8fafc;
     --surface-overlay: rgba(255, 255, 255, 0.94);
     --surface-control: #f1f5f9;
+    /* See the :root block for the derivation; this is the explicit-light mirror. */
+    --surface-control-hover: #e8edf3;
+
     --text: #0f172a;
     /* Solved against every surface this can land on, not just white. At #64748b it cleared AA on
      * white (4.76) but failed on the accent (4.37) and danger (4.35) tints — and muted text sits on

@@ -2625,7 +2625,7 @@ watch(() => props.readOnly, readOnly => {
           <button
             type="button"
             @click="togglePanel"
-            class="h-11 w-11 shrink-0 bg-slate-100 hover:bg-slate-200 rounded-lg flex items-center justify-center transition-all hover:scale-105"
+            class="h-11 w-11 shrink-0 board-chip-neutral hover:board-control-hover rounded-lg flex items-center justify-center transition-all hover:scale-105"
             :aria-label="t('app.collapse')"
           >
             <span class="material-symbols-outlined text-slate-600 text-base transition-transform duration-200" aria-hidden="true">dock_to_left</span>
@@ -2637,7 +2637,7 @@ watch(() => props.readOnly, readOnly => {
           <button
             type="button"
             @click="togglePanel"
-            class="h-11 w-11 shrink-0 bg-slate-100 hover:bg-slate-200 rounded-xl flex items-center justify-center transition-all hover:scale-105"
+            class="h-11 w-11 shrink-0 board-chip-neutral hover:board-control-hover rounded-xl flex items-center justify-center transition-all hover:scale-105"
             :aria-label="t('app.expand')"
           >
             <span class="material-symbols-outlined text-slate-600 text-base" aria-hidden="true">dock_to_right</span>
@@ -2671,7 +2671,7 @@ watch(() => props.readOnly, readOnly => {
    'min-w-0 min-h-11 py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all duration-200 flex flex-col items-center gap-1',
    activeSection === tab.id
    ? CONTROL_TAB_ACTIVE_CLASS
-   : 'text-slate-500 hover:bg-slate-200 hover:text-slate-700'
+   : 'board-text-muted hover:board-control-hover hover:board-text-strong'
    ]"
           >
             <span class="material-symbols-outlined text-sm" aria-hidden="true">{{ tab.icon }}</span>
@@ -3577,7 +3577,7 @@ watch(() => props.readOnly, readOnly => {
                         <button
                           type="button"
                           @click="openConditionDialog('a', index)"
-                          class="p-1 text-slate-500 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors"
+                          class="p-1 board-text-muted hover:board-text-strong hover:board-control-hover rounded transition-colors"
                           :aria-label="t('app.editConditionNumbered', { number: index + 1 })"
                         >
                           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -3675,7 +3675,7 @@ watch(() => props.readOnly, readOnly => {
                         <button
                           type="button"
                           @click="openConditionDialog('if', index)"
-                          class="p-1 text-slate-500 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors"
+                          class="p-1 board-text-muted hover:board-text-strong hover:board-control-hover rounded transition-colors"
                           :aria-label="t('app.editConditionNumbered', { number: index + 1 })"
                         >
                           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -3773,7 +3773,7 @@ watch(() => props.readOnly, readOnly => {
                         <button
                           type="button"
                           @click="openConditionDialog('then', index)"
-                          class="p-1 text-slate-500 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors"
+                          class="p-1 board-text-muted hover:board-text-strong hover:board-control-hover rounded transition-colors"
                           :aria-label="t('app.editConditionNumbered', { number: index + 1 })"
                         >
                           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

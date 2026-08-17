@@ -500,8 +500,8 @@ watch(selectedStateIndex, () => {
             :class="isPlaying
               ? 'bg-[color:var(--accent-fill)] text-white'
               : totalStates <= 1
-                ? 'cursor-not-allowed bg-slate-100 text-slate-500'
-                : 'bg-slate-100 text-slate-700 hover:bg-slate-200'"
+                ? 'cursor-not-allowed board-chip-neutral'
+                : 'board-chip-neutral hover:board-control-hover hover:board-text-strong'"
             @click="play"
           >
             <span class="material-symbols-outlined text-base" aria-hidden="true">{{ isPlaying ? 'pause' : 'play_arrow' }}</span>
@@ -513,7 +513,7 @@ watch(selectedStateIndex, () => {
             <button
               type="button"
               data-testid="simulation-timeline-restore-changes"
-              class="board-card inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 px-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100"
+              class="board-card inline-flex h-8 items-center gap-1 rounded-lg border board-border-subtle px-2 text-xs font-semibold board-text-strong transition-colors hover:board-control-hover"
               :aria-label="t('app.showStepChanges')"
               @click="emit('restore-change-panel')"
             >
@@ -525,7 +525,7 @@ watch(selectedStateIndex, () => {
             <button
               type="button"
               data-testid="simulation-timeline-run-details"
-              class="board-card inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 px-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100"
+              class="board-card inline-flex h-8 items-center gap-1 rounded-lg border board-border-subtle px-2 text-xs font-semibold board-text-strong transition-colors hover:board-control-hover"
               :aria-label="t('app.viewSimulationRunDetails')"
               @click="emit('open-run-details')"
             >
@@ -537,7 +537,7 @@ watch(selectedStateIndex, () => {
             <button
               type="button"
               data-testid="simulation-timeline-close"
-              class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100"
+              class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium board-text-muted transition-colors hover:board-control-hover hover:board-text-strong"
               :aria-label="t('app.close')"
               @click="close"
             >
@@ -591,7 +591,7 @@ watch(selectedStateIndex, () => {
           <div class="flex items-center gap-1">
             <button
               type="button"
-              class="board-card inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-300"
+              class="board-card inline-flex h-8 w-8 items-center justify-center rounded-lg border board-border-subtle board-text-strong transition-colors hover:board-control-hover disabled:cursor-not-allowed disabled:text-slate-300"
               :disabled="selectedStateIndex <= 0"
               :aria-label="t('app.traceVisualization.previousState')"
               @click="selectPreviousState"
@@ -614,7 +614,7 @@ watch(selectedStateIndex, () => {
             </label>
             <button
               type="button"
-              class="board-card inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-300"
+              class="board-card inline-flex h-8 w-8 items-center justify-center rounded-lg border board-border-subtle board-text-strong transition-colors hover:board-control-hover disabled:cursor-not-allowed disabled:text-slate-300"
               :disabled="selectedStateIndex >= totalStates - 1"
               :aria-label="t('app.traceVisualization.nextState')"
               @click="selectNextState"
@@ -735,7 +735,7 @@ watch(selectedStateIndex, () => {
       </section>
 
       <details class="group mb-2 pt-2" data-testid="simulation-step-values">
-        <summary class="flex cursor-pointer list-none items-center justify-between gap-3 rounded-lg px-1 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-100">
+        <summary class="flex cursor-pointer list-none items-center justify-between gap-3 rounded-lg px-1 py-1 text-[11px] font-semibold board-text-muted hover:board-control-hover hover:board-text-strong">
           <span class="inline-flex items-center gap-1.5">
             <span class="material-symbols-outlined text-base" aria-hidden="true">tune</span>
             {{ t('app.traceVisualization.stateDetails') }}

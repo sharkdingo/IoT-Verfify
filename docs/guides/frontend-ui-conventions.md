@@ -460,7 +460,35 @@ this survived several review passes, and why a light-only check will not find it
   user reaches for first was the inert one. Guarded by its own rule, scoped to `<button>` openings: a
   selected segment legitimately holds a fill with no hover, because there the fill states *which segment
   is selected* and reacting to the pointer would suggest it is still a choice. The verification panel's
-  two attack-mode buttons are that shape and are exempt by the ternary they are written in.
+  two attack-mode buttons are that shape and are exempt by the ternary they are written in. The exemption
+  searches every branch after the fill, not just the adjacent one: the two replay-bar Play buttons nest a
+  second ternary for the disabled case, so an adjacency-only test reported them as inert when the accent
+  fill there means *playing* — a state, exactly what the exemption is for.
+- **The neutral control needs a hover ground too, and it cannot borrow Tailwind's.** The roles above all
+  had a `--*-fill-hover`; the *neutral* control — chips, panel toggles, close buttons, replay transport —
+  had none, so 26 sites reached for `hover:bg-slate-100/200`, which cannot win on a board surface (§9).
+  Both failure modes were measured in dark mode: where the element also carried a bare `bg-slate-*`, an
+  `!important` theme remap owned the background and the hover did **nothing** (11.82:1 at rest and
+  hovered — the replay bar's Play button and the history panel's Dismiss button gave no feedback at all);
+  where nothing competed, the utility applied and painted rgb(241,245,249) near-white under light ink at
+  **1.13:1**. `--surface-control-hover` closes it: `#273548` dark (`--text` 10.04, `--text-muted` 4.85),
+  `#e8edf3` light (15.17 / 4.23). Asymmetric on purpose — dark lightens toward the viewer, light darkens.
+- **A muted neutral must strengthen its ink on hover, because the light ground cannot pass alone.**
+  `--text-muted` is itself tuned to 4.55:1 on `--surface-control`, so *any* darker light-theme ground puts
+  it under AA; `#e8edf3` reaches 4.23 (an improvement on the 4.04 that `hover:bg-slate-200` measured, not
+  a fix). So `hover:board-control-hover` on a `board-text-muted`/`board-chip-neutral` control is paired
+  with `hover:board-text-strong` — the convention `SystemInspector` had already written by hand.
+  `styles/__tests__/neutralHoverFeedback.spec.ts` enforces the pair, exempting icon-only controls where
+  SC 1.4.3 does not apply and the glyph sets its own colour.
+- **A chip role owns its resting ink, so a second ink class beside it is dead.** `board-chip-*` sets `color`
+  as part of the role (`board-chip-neutral` is `--text-muted`), and `.board-text-strong` is a bare 0-1-0 rule
+  sitting *earlier* in `board.css` — so the chip wins on source order, and its `.iot-board` arm wins outright.
+  Confirmed in the emitted bundle (2,806 bytes apart) and then in a browser: removing `board-text-strong`
+  from three controls changed the rendered ink by nothing at all, because it had never applied. It was
+  introduced migrating `bg-slate-100 text-slate-700` to roles — the ground moved and the ink silently did not.
+  Let the chip set the resting ink and change it on hover, which is a different rule and does apply
+  (measured 5.71 → 10.04:1). A chip paired with the ink of the *same* role is merely redundant and renders
+  what it says; ~60 sites do that and are fine. `roleClassVariants.spec.ts` flags only the mismatched pair.
 - **An accessible name must use the same word as the label beside it.** The counterexample rail's step
   buttons announced "First violation" — the exploration wording, hardcoded — on the state whose visible
   marker read "Violation". One state, two names, on one control, and only a screen-reader user met the
@@ -698,6 +726,14 @@ rendered pixels disagree.
   `.iot-board .board-side-panel .text-slate-500`; the fix was source *order*, not specificity, and two
   attempts at raising specificity failed first.
 
+**Layers outrank specificity entirely, and that runs the other way.** Tailwind v4 emits its utilities into
+`@layer utilities`; every rule in `board.css` is unlayered, and an unlayered rule beats a layered one at
+*any* specificity. Proved in-browser: an unlayered `section.probeSec` (0-1-1) overrode `.bg-slate-100`. So
+the two directions are not symmetric — a hand-written `board.css` rule cannot be out-specified by a
+utility, and adding a `dark:` variant does not help, because the variant lands in the same losing layer.
+This is why a Tailwind hover utility on a board surface is never the fix; see §6's neutral-hover rules for
+the 26 sites it silently broke.
+
 ### Rules
 
 - Do not put a `max-width`/`max-height` in a scoped block on an element that also carries a Tailwind
@@ -705,6 +741,13 @@ rendered pixels disagree.
   `styles/__tests__/scopedWidthOverride.spec.ts` fails on the overlap, per axis.
 - A broad scoped selector (`span`, `p`, `button`) must exempt the role classes used inside it —
   `span:not(.board-text-accent)` — or the role has no way to win in that component.
+- **"Defined" is not the same as "defined where this element is."** `roleClassVariants.spec.ts` matched the
+  class name as a substring, so a variant declared only as `.iot-board .hover\:board-…` counted as defined
+  for the two replay bars, which are *siblings* of `.iot-board`. That is the fourth defect from this one
+  structure, so it is now a check: a variant class used inside a `.board-timeline` region must have at least
+  one definition that is unprefixed or `.board-timeline`-scoped. The check reads the stylesheet with comments
+  stripped — a prose mention of the bare selector (`board.css:1953` explains why one lost the cascade) read as
+  a definition and let the first version pass a class that had none.
 - When a rule that looks right does not apply, read the winner from CDP matched-styles rather than
   reasoning about specificity. At equal specificity, source order decides, and raising specificity is then
   the wrong fix.

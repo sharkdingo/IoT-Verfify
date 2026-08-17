@@ -647,7 +647,7 @@ const fuzzingOutcomeBadge = (run: AvailableFuzzingRunSummary) => {
                   </button>
                   <button
                     type="button"
-                    class="inline-flex min-h-11 items-center justify-center gap-1 rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-200 disabled:cursor-wait disabled:opacity-60"
+                    class="inline-flex min-h-11 items-center justify-center gap-1 rounded board-chip-neutral px-2 py-1 text-xs font-medium hover:board-control-hover hover:board-text-strong disabled:cursor-wait disabled:opacity-60"
                     :disabled="taskActionPending('dismiss', task)"
                     :aria-busy="taskActionPending('dismiss', task)"
                     @click="emitDismissTask(task)"

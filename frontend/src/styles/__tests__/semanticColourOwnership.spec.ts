@@ -267,12 +267,19 @@ describe('semantic colour ownership', () => {
           // A hover on any of the fill's own properties counts: some buttons lift with a ring or a border
           // instead, and this rule is about pointer feedback existing, not about which property carries it.
           if (/(?:group-)?hover:(?:bg|border|ring|shadow|outline|text)-/.test(tag)) continue
-          // A selected segment: the fill sits in a quoted branch that a `?` opens, and the following branch
+          // A selected segment: the fill sits in a quoted branch that a `?` opens, and some *later* branch
           // is the unselected one that hovers. Matched on the quoted string rather than "text after a `?`" —
           // `bg-[color:var(--danger-fill)]` contains a colon itself, so a `[^:]*` span cannot reach it.
+          //
+          // The alternative branch is not always adjacent. The two replay-bar Play buttons nest a second
+          // ternary for the disabled case (`isPlaying ? fill : (totalStates <= 1 ? disabled : hoverable)`),
+          // so the branch immediately after the fill carries no hover and an adjacency-only test reported
+          // them as inert. They are the shape this exemption exists for — the accent fill means *playing*,
+          // a state, not a resting appearance — so the search continues through the remaining branches.
           const quoted = fill.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-          const selectedBranch = new RegExp(`\\?\\s*'[^']*${quoted}[^']*'\\s*:\\s*'[^']*hover:`)
-          if (selectedBranch.test(tag)) continue
+          const fillBranch = new RegExp(`\\?\\s*'[^']*${quoted}[^']*'\\s*:`)
+          const fillAt = tag.search(fillBranch)
+          if (fillAt >= 0 && /hover:/.test(tag.slice(fillAt))) continue
           offenders.push(`${name}:${index + 1} <button> filled with --${role}-fill has no hover state`)
         }
       })

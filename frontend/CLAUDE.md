@@ -219,6 +219,11 @@ single owner of the "session gone → login" location.
   2.54:1 across 60 sites, light theme passing throughout, which is why a light-only check misses it). Fill with
   `--<role>-fill`; a fill carrying no ink keeps the bare role. Disable by desaturating, never by fading
   opacity, which fades the label with it. Structural neutrals have a floor: `slate-400` is 2.56:1 on white.
+  The neutral control hovers with `hover:board-control-hover`, never a Tailwind `hover:bg-slate-*` — those
+  land in `@layer utilities`, which loses to every unlayered `board.css` rule at any specificity, so the
+  hover either did nothing (11.82:1 rest and hovered) or painted near-white ink-on-ink at 1.13:1. On a
+  `board-text-muted`/`board-chip-neutral` control, pair it with `hover:board-text-strong`: the light ground
+  leaves muted ink at 4.23:1, because `--text-muted` is tuned against the *resting* control.
   Values, tables and the reasoning:
   [../docs/guides/frontend-ui-conventions.md](../docs/guides/frontend-ui-conventions.md) §6.
 - **A `position: fixed` overlay cannot read a variable scoped to the board.** The `--board-*` width

@@ -915,7 +915,7 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
             <button
               type="button"
               @click="togglePanel"
-              class="board-panel-toggle inline-flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg text-slate-500 transition-all hover:bg-slate-100 hover:text-slate-800"
+              class="board-panel-toggle inline-flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg board-text-muted transition-all hover:board-control-hover hover:board-text-strong"
               :aria-label="t('app.collapse')"
             >
               <span class="material-symbols-outlined text-base" aria-hidden="true">dock_to_left</span>
@@ -935,7 +935,7 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
           <button
             type="button"
             @click="togglePanel"
-            class="board-panel-toggle inline-flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg text-slate-500 transition-all hover:bg-slate-100 hover:text-slate-800"
+            class="board-panel-toggle inline-flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg board-text-muted transition-all hover:board-control-hover hover:board-text-strong"
             :aria-label="t('app.expand')"
           >
             <span class="material-symbols-outlined text-base" aria-hidden="true">dock_to_left</span>
@@ -1302,7 +1302,7 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
               <button
                 v-if="sectionSearch.devices"
                 type="button"
-                class="absolute right-1.5 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                class="absolute right-1.5 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md board-text-muted hover:board-control-hover hover:board-text-strong"
                 :aria-label="t('app.clearSearch')"
                 @click="clearSectionSearch('devices')"
               >
@@ -1464,7 +1464,7 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
               <button
                 v-if="sectionSearch.rules"
                 type="button"
-                class="absolute right-1.5 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                class="absolute right-1.5 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md board-text-muted hover:board-control-hover hover:board-text-strong"
                 :aria-label="t('app.clearSearch')"
                 @click="clearSectionSearch('rules')"
               >
@@ -1629,7 +1629,7 @@ const syncFullTextTitle = (event: PointerEvent | FocusEvent) => {
               <button
                 v-if="sectionSearch.specs"
                 type="button"
-                class="absolute right-1.5 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                class="absolute right-1.5 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md board-text-muted hover:board-control-hover hover:board-text-strong"
                 :aria-label="t('app.clearSearch')"
                 @click="clearSectionSearch('specs')"
               >

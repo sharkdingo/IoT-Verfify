@@ -55,6 +55,47 @@ const declaredSelectors = () => {
   return STYLE_FILES.map(file => readFileSync(join(src, file), 'utf8')).join('\n')
 }
 
+/**
+ * The same text with comments blanked out.
+ *
+ * The substring check above may read a comment, because a class named in prose is still a class someone
+ * defined somewhere. The reachability check below may **not**: `board.css:1953` explains in prose that a bare
+ * `.hover\:board-text-danger:hover` lost the cascade, and reading that sentence as a definition made the check
+ * pass a class that is only ever declared under `.iot-board `. Caught by mutation, not by review.
+ */
+const declaredRules = () => declaredSelectors().replace(/\/\*[\s\S]*?\*\//g, '')
+
+/**
+ * The markup of the two replay bars, which live **outside** `.iot-board`.
+ *
+ * `.board-timeline-host` is a sibling of the board shell, not a descendant — the same structure that made the
+ * `--board-*` variables unreadable inside it. So an `.iot-board`-prefixed rule cannot reach anything here, and
+ * a class defined *only* that way renders nothing in a replay bar while the substring check above stays green.
+ * Sliced from the `.board-timeline` element (the host is one wrapper above it) to the end of the file, which
+ * covers both bars: `SimulationTimeline.vue` is the whole component and `Board.vue`'s trace bar is its last
+ * template region. Over-reading is safe here — a false positive names a real unreachable definition wherever
+ * it sits — but under-reading is not, so a missing marker throws rather than skipping the file. A guard that
+ * silently checks nothing is the failure mode this whole file exists to prevent.
+ */
+const timelineMarkup = () => {
+  const src = join(__dirname, '../..')
+  return ['components/SimulationTimeline.vue', 'views/Board.vue'].map(file => {
+    const text = readFileSync(join(src, file), 'utf8')
+    const at = text.indexOf('class="board-timeline board-timeline--')
+    if (at < 0) {
+      throw new Error(
+        `${file} no longer opens a \`board-timeline board-timeline--*\` element, so this guard would check `
+        + 'nothing. Update the marker rather than deleting the case.')
+    }
+    return {
+      name: file,
+      text: text.slice(at),
+      // Line of the opening element, so an offender reports a number that resolves in the editor.
+      startLine: text.slice(0, at).split('\n').length,
+    }
+  })
+}
+
 describe('role class variants', () => {
   it('defines every variant-prefixed role class that a template uses', () => {
     const css = declaredSelectors()
@@ -72,6 +113,46 @@ describe('role class variants', () => {
 
     expect(offenders, `these classes render nothing; define them in board.css:\n${offenders.join('\n')}`)
       .toEqual([])
+  })
+
+  it('defines the replay bars\' variant classes where a sibling of .iot-board can reach them', () => {
+    /*
+     * The check above is a substring match, so it cannot tell "defined" from "defined somewhere this element
+     * is not". Every rule in `board.css` that themes a role variant is written `.iot-board .hover\:board-…`,
+     * and the two replay bars are **siblings** of `.iot-board` — so for them, that is not a definition.
+     *
+     * This is the fourth incident from the same structure (the `--board-*` variables, a layout contract where
+     * only the pair rule matched, and both classes migrated here), which is why it becomes a check rather than
+     * another paragraph in the docs. `hover:board-text-strong` was `.iot-board`-only when the transport controls
+     * started using it; the class was "defined", the suite was green, and the hover did nothing.
+     *
+     * Reachable means: at least one selector defining the class is either unprefixed or prefixed with a
+     * `.board-timeline*` scope. A `.iot-board`-prefixed definition alone is what this rejects.
+     */
+    const css = declaredRules()
+    const offenders: string[] = []
+
+    for (const { name, text, startLine } of timelineMarkup()) {
+      const used = new Set<string>()
+      for (const match of text.matchAll(
+        /\b((?:hover|focus|focus-visible|active|disabled|dark|group-hover|group-focus|group-focus-within):(?:board|iot)-[A-Za-z0-9_-]+)/g)) {
+        used.add(match[1])
+      }
+      for (const variantClass of used) {
+        const escaped = variantClass.replace(':', '\\\\:').replace(/[.*+?^${}()|[\]]/g, '\\$&')
+        // Every selector list that ends in this class, capturing whatever precedes it on the same selector.
+        const rules = [...css.matchAll(new RegExp(`([^{}\\n,]*\\.${escaped}[^{}\\n,]*)\\s*(?:,|\\{)`, 'g'))]
+        const reachable = rules.some(([, selector]) => !selector.includes('.iot-board '))
+        if (rules.length === 0) continue // the definition check above owns "not defined at all"
+        if (!reachable) {
+          offenders.push(
+            `${name} (from line ${startLine}): ${variantClass} is only defined under \`.iot-board \`, `
+            + 'which cannot match inside a replay bar')
+        }
+      }
+    }
+
+    expect(offenders, offenders.join('\n')).toEqual([])
   })
 
   it('never puts an opacity modifier on a hand-written class', () => {
@@ -142,6 +223,54 @@ describe('role class variants', () => {
     }
 
     expect(offenders, `a chip role cannot render a border; use board-surface-* instead:\n${offenders.join('\n')}`)
+      .toEqual([])
+  })
+
+  it('never asks a chip role for a resting ink it will overrule', () => {
+    /*
+     * The same contradiction in the ink dimension, and it resolves against the author the same way.
+     * `board-chip-*` sets `color` as part of the role — `board-chip-neutral` is `var(--text-muted)` — and
+     * `.board-text-strong` is a bare 0-1-0 rule that sits **earlier** in `board.css`. So at equal
+     * specificity the chip wins on source order, and its `.iot-board .board-chip-neutral` arm (0-2-0) wins
+     * outright. Confirmed in the emitted bundle rather than inferred: `.board-text-strong{color:var(--text)}`
+     * appears 2,806 bytes before the chip rule in `index-*.css`.
+     *
+     * `board-chip-neutral board-text-strong` therefore renders muted, and nothing says so. Three sites read
+     * this way, all introduced while migrating `bg-slate-100 text-slate-700` to role classes — the ground
+     * moved to the role and the ink silently did not. Let the chip own the resting ink and change it on
+     * hover (`hover:board-text-strong`), which is a different rule and does apply.
+     *
+     * Two shapes are *not* flagged. A `hover:`/`focus:`-prefixed ink targets a state the resting role does
+     * not claim. And `board-chip-danger board-text-danger` — the chip and the ink naming the **same** role —
+     * is the overwhelmingly common pairing here (~60 sites): the chip already sets that colour, so the pair
+     * is redundant rather than misleading, and it renders what it says. Only a *mismatched* pair is a lie,
+     * because there the losing class is the one the author wrote for a reason.
+     */
+    const offenders: string[] = []
+    const src = join(__dirname, '../..')
+    for (const dir of DIRS) {
+      for (const entry of readdirSync(join(src, dir), { withFileTypes: true })) {
+        if (!entry.isFile() || !entry.name.endsWith('.vue')) continue
+        const text = readFileSync(join(src, dir, entry.name), 'utf8')
+        text.split(/\r?\n/).forEach((line, index) => {
+          // Comments quote the defect they explain; see the sibling rule above.
+          if (/^\s*(\/\/|\*|<!--)/.test(line)) return
+          // Pair them inside one quoted class group, so two branches of a ternary are not read as a
+          // contradiction — `chip-success … : … chip-danger board-text-danger` is two separate lists.
+          for (const group of line.match(/'[^']*'|"[^"]*"/g) ?? [line]) {
+            const chip = group.match(/(^|[\s'"])board-chip-([a-z]+)(?=[\s'"])/)
+            if (!chip) continue
+            const inkMatch = group.match(/(^|[\s'"])board-text-(strong|muted|info|danger|warning|success)(?=[\s'"])/)
+            if (!inkMatch) continue
+            if (inkMatch[2] === chip[2]) continue
+            offenders.push(
+              `${dir}/${entry.name}:${index + 1}  board-chip-${chip[2]} + board-text-${inkMatch[2]}`)
+          }
+        })
+      }
+    }
+
+    expect(offenders, `a chip role owns its resting ink; move the ink to hover: or drop it:\n${offenders.join('\n')}`)
       .toEqual([])
   })
 })

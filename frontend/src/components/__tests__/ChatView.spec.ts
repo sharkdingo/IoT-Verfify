@@ -99,15 +99,34 @@ const acceptAndFinishStream = (
   callbacks.onFinish?.({ turnId: args[4], executionStatus })
 }
 
-const mountChat = (props: Record<string, unknown> = {}) => mount(ChatView, {
-  props: { boardMode: true, ...props },
-  global: {
-    plugins: [i18n],
-    stubs: {
-      ChatMarkdown: { props: ['source'], template: '<div class="chat-markdown-stub">{{ source }}</div>' }
+/**
+ * Every mount this file makes, so `afterEach` can tear down one that a thrown assertion skipped.
+ *
+ * `ChatView` re-arms a 1s `scheduleActiveSessionsPoll` after each poll, and `chatViewMounted` is
+ * module-scoped — so a component that outlives its test keeps polling, and each tick consumes one
+ * `mockResolvedValueOnce` from the shared queues. Proved by mutation: forcing one assertion to fail in the
+ * reattachment test produced **7** failures with the unmount only on the success path, and **1** with it in
+ * a `finally`. The five extra were the five tests that follow, each reading a response meant for another.
+ *
+ * The `beforeEach` reset below cannot cover this — it resets implementations, not a live component — and 17
+ * cases here run on real timers with one-shot queues, so per-test `finally` blocks would leave the next one
+ * added unprotected. Tracking the mount is the part that cannot be forgotten.
+ */
+const mountedChats: Array<{ unmount: () => void }> = []
+
+const mountChat = (props: Record<string, unknown> = {}) => {
+  const wrapper = mount(ChatView, {
+    props: { boardMode: true, ...props },
+    global: {
+      plugins: [i18n],
+      stubs: {
+        ChatMarkdown: { props: ['source'], template: '<div class="chat-markdown-stub">{{ source }}</div>' }
+      }
     }
-  }
-})
+  })
+  mountedChats.push(wrapper)
+  return wrapper
+}
 
 describe('ChatView', () => {
   beforeEach(() => {
@@ -132,6 +151,15 @@ describe('ChatView', () => {
   })
 
   afterEach(() => {
+    // First, because a still-mounted ChatView polls (see `mountedChats`) and would otherwise keep
+    // consuming queued responses through the next test. Already-unmounted wrappers are a no-op.
+    while (mountedChats.length) {
+      try {
+        mountedChats.pop()?.unmount()
+      } catch {
+        // A wrapper torn down inside its own test can throw here; the remaining ones still matter.
+      }
+    }
     authStore.logout()
     chatStore.closeChat()
     chatStore.setStreaming(false)
@@ -1514,20 +1542,28 @@ describe('ChatView', () => {
     chatStore.openChat()
 
     const wrapper = mountChat({ executeCommand })
-    await flushPromises()
-    await wrapper.get('[data-testid="chat-stop"]').trigger('click')
-    await flushPromises()
+    // `finally`, like the five neighbouring reattachment cases — and here it matters more, because this one
+    // runs on *real* timers. A failing assertion used to skip the unmount, leaving the component's 1s
+    // `scheduleActiveSessionsPoll` alive; each tick then consumed one `mockResolvedValueOnce` from the
+    // shared queues, so the next five tests read a response meant for this one. Observed in a full-suite
+    // run: one starved test here produced six failures, none of which reproduced in isolation.
+    // `vi.resetAllMocks()` in `beforeEach` cannot help — it resets implementations, not a mounted component.
+    try {
+      await flushPromises()
+      await wrapper.get('[data-testid="chat-stop"]').trigger('click')
+      await flushPromises()
 
-    expect(chatApi.requestSessionStop).toHaveBeenCalledWith('session-1', undefined)
-    expect(executeCommand).toHaveBeenCalledWith({
-      type: 'REFRESH_DATA',
-      payload: { target: 'board_state' }
-    })
-    expect(wrapper.text()).toContain('用户已停止。')
-    expect(wrapper.find('[data-testid="chat-remote-execution"]').exists()).toBe(false)
-    expect(chatStore.state.streaming).toBe(false)
-
-    wrapper.unmount()
+      expect(chatApi.requestSessionStop).toHaveBeenCalledWith('session-1', undefined)
+      expect(executeCommand).toHaveBeenCalledWith({
+        type: 'REFRESH_DATA',
+        payload: { target: 'board_state' }
+      })
+      expect(wrapper.text()).toContain('用户已停止。')
+      expect(wrapper.find('[data-testid="chat-remote-execution"]').exists()).toBe(false)
+      expect(chatStore.state.streaming).toBe(false)
+    } finally {
+      wrapper.unmount()
+    }
   })
 
   it('automatically reloads a reattached execution when it finishes remotely', async () => {
@@ -3235,6 +3271,15 @@ describe('ChatView voice input', () => {
   })
 
   afterEach(() => {
+    // This block mounts through the same helper, so it owes the same teardown — `mountedChats` is
+    // file-scoped, and a wrapper left here would poll on into the *next* describe.
+    while (mountedChats.length) {
+      try {
+        mountedChats.pop()?.unmount()
+      } catch {
+        // See the sibling hook above.
+      }
+    }
     delete (window as any).SpeechRecognition
     document.body.innerHTML = ''
   })

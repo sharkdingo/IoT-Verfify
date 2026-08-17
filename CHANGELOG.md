@@ -19,6 +19,34 @@ history into a technical spec. The spec content itself now lives under
 
 #### Fixed
 
+- **Neutral controls gave no hover feedback, or lit up unreadably, in the dark theme.** Every semantic role
+  had a hover ground except the neutral one, so 26 controls — the two replay bars' transport, panel toggles,
+  close buttons, search-clear buttons, the run-history Dismiss button — reached for Tailwind's
+  `hover:bg-slate-100/200`. Tailwind emits its utilities into `@layer utilities`, and an unlayered rule beats
+  a layered one at any specificity, so on a board surface those could never win. Measured, both outcomes were
+  wrong: where the element also carried a bare `bg-slate-*`, a theme remap owned the background and the hover
+  did nothing at all (11.82:1 at rest and hovered), so the Play button and Dismiss button were inert under
+  the pointer; where nothing competed, the utility applied and painted near-white rgb(241,245,249) under
+  light ink at **1.13:1**, so the label vanished on contact. Adding `dark:` variants would have changed
+  nothing — the same layer loses either way. Now `hover:board-control-hover`, backed by a per-theme
+  `--surface-control-hover` (`#273548` dark, `#e8edf3` light; the two directions are asymmetric because a
+  hover has to move *toward* the viewer), with a strengthened ink required alongside it wherever the resting
+  ink is muted — the light ground reaches only 4.23:1 under `--text-muted`, which is tuned against the
+  resting control. All 26 sites verified in a browser against the built bundle in both themes: the ground
+  changes on hover and the hovered label measures 10.04:1 (dark) / 15.17:1 (light). Three of those controls
+  had also asked for strong resting ink beside a chip role that sets its own — the chip wins, so the ink class
+  had never rendered; the chip now owns the resting ink and the hover is what strengthens it. The guard that was
+  supposed to catch a role class rendering nothing had reported one of these as fine, because it matched the
+  class name anywhere in the stylesheet and the only declaration was scoped to `.iot-board` — which the two
+  replay bars are siblings of, not descendants. It now checks that a variant class used in a replay bar is
+  declared somewhere that surface can actually match.
+- **One failing assistant-panel test reported twelve more, hiding which one was real.** `ChatView` re-arms a
+  1-second background-session poll after every tick, and the flag gating it is module-scoped, so a component
+  that outlived its test kept polling — each tick consuming one queued response intended for a later test.
+  Most cases unmounted only on the success path, so any genuine failure (or one slow tick on a loaded
+  machine) manufactured a cascade of unrelated ones. Measured by forcing a single assertion to fail: 13
+  failures before, 1 after. The teardown now runs for every mount regardless of how the test ended. No
+  product code changed; this only affects what the suite reports.
 - **A run deleted elsewhere left its counterexample or finding replaying, because only its result dialog
   was reconciled.** Deleting a verification run or an exploration run from the AI assistant or another tab
   arrives as a history reload, and the board closes any surface still showing the deleted record — but it
